@@ -1,66 +1,118 @@
 ---
-description: Implement a task using a implementer→spec-compliance-reviewer->code-quality-reviewer loop (max 3 iterations). Presents open issues if no agreement is reached.
+description: Run the canonical subagent-driven-development workflow for one task using two sequential loop invocations.
+argument-hint: <implementation task>
 ---
 
-Use the subagent tool in **loop** mode to implement the following:
+Use the subagent tool to implement the following:
 
 $@
 
-## Loop Configuration
+Important: current `loop` mode supports only two roles per invocation (`coder` and
+`reviewer`). To run the canonical 3-agent workflow, execute **two loop invocations in
+sequence** with the same `implementer` agent:
 
-- **implementer** agent implements the task. On subsequent iterations it receives the reviewer's feedback via `{feedback}`.
-- **spec compliance reviewer** agent reviews the the spec compliance of the implementation. It signals approval by including **"Spec compliant"** in its assessment.
-- **code quality reviewer** agent reviews the implementation. It signals approval by including **"Ready to merge: Yes"** in its assessment.
-- **maxIterations**: 3
-- **approvalPhrase**: `Ready to merge: Yes`
+1. `implementer` ↔ `spec-compliance-reviewer`
+2. `implementer` ↔ `code-quality-reviewer`
 
-## Coder Task
+Keep this prompt focused on execution mechanics. The detailed behavior of each role is
+owned by the agent definitions.
 
-Implement the following from the implementation plan: $@
+## Phase 1 — Spec compliance loop
 
-Use `{feedback}` as the placeholder where reviewer feedback will be injected on subsequent iterations.
+Run the subagent tool in `loop` mode with:
 
-## Spec compliance reviewer task
+- `coder.agent`: `implementer`
+- `reviewer.agent`: `spec-compliance-reviewer`
+- `approvalPhrase`: `Spec compliant`
+- `maxIterations`: `3`
 
-What was requested: $@
-Review what the implementer did. The implementers output is available via `{previous}`.
-**If the spec reviewer approved** (`Spec compliant` found): the code quality reviewer
-gets invoked.
+### Coder task
 
-## Code quality reviewer task
+Implement the following task exactly as requested:
 
-What was requested: $@
-Review what the implementer did. The implementers output is available via `{previous}`.
+$@
 
-## After the Loop
+Use `{feedback}` for reviewer feedback on subsequent iterations.
 
+### Reviewer task
 
-**If the reviewer approved** (`Ready to merge: Yes` found):
+Requested task:
+
+$@
+
+Review the actual implementation against the request. The implementer's output is
+available via `{previous}`.
+
+Approve only by including the exact phrase:
+
+`Spec compliant`
+
+If not approved, list concrete missing, extra, or incorrect work, with file:line
+references where possible.
+
+## Phase 2 — Code quality loop
+
+Only run this phase if phase 1 is approved.
+
+Run the subagent tool in `loop` mode with:
+
+- `coder.agent`: `implementer`
+- `reviewer.agent`: `code-quality-reviewer`
+- `approvalPhrase`: `Ready to merge: Yes`
+- `maxIterations`: `3`
+
+### Coder task
+
+The following task is now spec compliant:
+
+$@
+
+Review the current implementation, make any necessary quality improvements, run the
+relevant tests, and summarize the resulting implementation.
+
+Use `{feedback}` for reviewer feedback on subsequent iterations.
+
+### Reviewer task
+
+Original task:
+
+$@
+
+Review the actual implementation for code quality and production readiness. The
+implementer's output is available via `{previous}`.
+
+Approve only by including the exact phrase:
+
+`Ready to merge: Yes`
+
+If not approved, group issues by severity and include file:line references where
+possible.
+
+## Final response
+
+### If both phases approve
+
 Report back with:
 
-### What Was Implemented
-{DESCRIPTION}
+- **What Was Implemented**
+- **Commits**
+- **Scenarios** (if any)
+- **Learnings and good to know**
 
-### Commits
-List of git commits with their messages.
+### If phase 1 exhausts all 3 iterations without approval
 
-### Scenarios
-Filenames and short description (if applicable).
+Stop and report:
 
-### Learnings and good to know
-Things learned. Any further important information. No fluff.
+- **Implementation Status:** Spec compliance unresolved
+- **What Was Implemented**
+- **Open Spec Issues**
+- **Recommendation**
 
----
+### If phase 2 exhausts all 3 iterations without approval
 
-**If the loop exhausted all 5 iterations without approval**, do NOT just summarize — instead present the unresolved issues clearly:
+Report:
 
-### Implementation Status: Unresolved after 5 iterations
-
-### What Was Implemented
-Brief description of what the coder built.
-
-### Open Issues
-Extract and list every unresolved issue from the final reviewer feedback, grouped by severity (Critical / Important / Minor). For each issue include the file:line reference and what needs to be fixed.
-
-### Recommendation
-Your assessment of what the next step should be (e.g. which issues to tackle first to reach approval).
+- **Implementation Status:** Code quality unresolved
+- **What Was Implemented**
+- **Open Quality Issues**
+- **Recommendation**
