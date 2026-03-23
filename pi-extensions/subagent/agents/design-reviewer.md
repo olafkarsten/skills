@@ -1,5 +1,5 @@
 ---
-name: spec-review-agent
+name: design-reviewer
 description: Reviews design specs for completeness, consistency, and implementation-planning readiness.
 tools: read, grep, find, ls
 model: gpt-5.4-codex
