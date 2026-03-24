@@ -13,7 +13,7 @@ Assume they are a skilled developer, but know almost nothing about our toolset o
 
 **Announce at start:** "I'm using the writing-plans skill to create the implementation plan."
 
-**Context:** This should be run in a dedicated worktree (created by brainstorming skill).
+**Context:** This should be run on a dedicated feature branch. A git worktree is optional when the environment supports it, but it is not required.
 
 **Save plans to:** `docs/plans/YYYY-MM-DD-<feature-name>.md`
 - (User preferences for plan location override this default)
@@ -126,7 +126,7 @@ After writing the complete plan:
 
 ## Execution Handoff
 
-After saving the plan, offer execution choice:
+After saving the plan, confirm execution will happen on a dedicated feature branch (a worktree is optional), then offer execution choice:
 
 **"Plan complete and saved to `docs/plans/<filename>.md`. Two execution options:**
 

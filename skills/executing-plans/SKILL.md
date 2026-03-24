@@ -1,6 +1,6 @@
 ---
 name: executing-plans
-description: Use when you have a written implementation plan to execute in a separate session with review checkpoints
+description: Use when you have a written implementation plan to execute on a feature branch with review checkpoints
 ---
 
 # Executing Plans
@@ -19,7 +19,7 @@ Load plan, review critically, execute all tasks, report when complete.
 1. Read plan file
 2. Review critically - identify any questions or concerns about the plan
 3. If concerns: Raise them with your human partner before starting
-4. If no concerns: Create TodoWrite and proceed
+4. If no concerns: Create TodoWrite, confirm you're on a feature branch, and proceed
 
 ### Step 2: Execute Tasks
 
@@ -60,11 +60,13 @@ After all tasks complete and verified:
 - Don't skip verifications
 - Reference skills when plan says to
 - Stop when blocked, don't guess
-- Never start implementation on main/master branch without explicit user consent
+- Never start implementation on the devel branch without explicit user consent
 
 ## Integration
 
 **Required workflow skills:**
-- **superpowers:using-git-worktrees** - REQUIRED: Set up isolated workspace before starting
 - **superpowers:writing-plans** - Creates the plan this skill executes
 - **superpowers:finishing-a-development-branch** - Complete development after all tasks
+
+**Optional workflow skill:**
+- **superpowers:using-git-worktrees** - Use when a separate checkout is helpful and the development environment supports it

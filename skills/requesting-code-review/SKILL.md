@@ -25,7 +25,7 @@ Dispatch reviewer subagent to catch issues before they cascade. The reviewer get
 
 **1. Get git SHAs:**
 ```bash
-BASE_SHA=$(git rev-parse HEAD~1)  # or origin/main
+BASE_SHA=$(git rev-parse HEAD~1)  # or origin/devel
 HEAD_SHA=$(git rev-parse HEAD)
 ```
 

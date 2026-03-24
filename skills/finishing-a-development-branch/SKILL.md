@@ -40,8 +40,8 @@ Stop. Don't proceed to Step 2.
 ### Step 2: Determine Base Branch
 
 ```bash
-# Try common base branches
-git merge-base HEAD devel 2>/dev/null || git merge-base HEAD master 2>/dev/null
+# Determine merge-base against the default integration branch
+git merge-base HEAD devel 2>/dev/null
 ```
 
 Or ask: "This branch split from devel - is that correct?"
@@ -84,7 +84,7 @@ git merge <feature-branch>
 git branch -d <feature-branch>
 ```
 
-Then: Cleanup worktree (Step 5)
+Then: Clean up any temporary worktree if one was used (Step 5)
 
 #### Option 2: Push and Create PR
 
@@ -103,13 +103,13 @@ EOF
 )"
 ```
 
-Then: Cleanup worktree (Step 5)
+Then: Keep the branch/workspace as-is unless you explicitly used a temporary worktree you want to remove
 
 #### Option 3: Keep As-Is
 
-Report: "Keeping branch <name>. Worktree preserved at <path>."
+Report: "Keeping branch <name> as-is. If a worktree was used, preserve it at <path>."
 
-**Don't cleanup worktree.**
+**Don't clean up the branch or worktree.**
 
 #### Option 4: Discard
 
@@ -118,7 +118,7 @@ Report: "Keeping branch <name>. Worktree preserved at <path>."
 This will permanently delete:
 - Branch <name>
 - All commits: <commit-list>
-- Worktree at <path>
+- Worktree at <path> (if one was used)
 
 Type 'discard' to confirm.
 ```
@@ -131,11 +131,13 @@ git checkout <base-branch>
 git branch -D <feature-branch>
 ```
 
-Then: Cleanup worktree (Step 5)
+Then: Clean up any temporary worktree if one was used (Step 5)
 
-### Step 5: Cleanup Worktree
+### Step 5: Cleanup Worktree (If One Was Used)
 
-**For Options 1, 2, 4:**
+**For Options 1 and 4:**
+
+If this branch was being worked in a temporary worktree, remove that worktree after the branch work is complete.
 
 Check if in worktree:
 ```bash
@@ -147,12 +149,12 @@ If yes:
 git worktree remove <worktree-path>
 ```
 
-**For Option 3:** Keep worktree.
+**For Options 2 and 3:** Keep the current branch and workspace as-is unless the user explicitly asks for cleanup.
 
 ## Quick Reference
 
-| Option | Merge | Push | Keep Worktree | Cleanup Branch |
-|--------|-------|------|---------------|----------------|
+| Option | Merge | Push | Keep Workspace | Cleanup Branch |
+|--------|-------|------|----------------|----------------|
 | 1. Merge locally | ✓ | - | - | ✓ |
 | 2. Create PR | - | ✓ | ✓ | - |
 | 3. Keep as-is | - | - | ✓ | - |
@@ -169,8 +171,8 @@ git worktree remove <worktree-path>
 - **Fix:** Present exactly 4 structured options
 
 **Automatic worktree cleanup**
-- **Problem:** Remove worktree when might need it (Option 2, 3)
-- **Fix:** Only cleanup for Options 1 and 4
+- **Problem:** Remove the current workspace when it still may be needed (especially Options 2, 3)
+- **Fix:** Only clean up a worktree when one was actually used, and normally only for Options 1 and 4
 
 **No confirmation for discard**
 - **Problem:** Accidentally delete work
@@ -188,7 +190,7 @@ git worktree remove <worktree-path>
 - Verify tests before offering options
 - Present exactly 4 options
 - Get typed confirmation for Option 4
-- Clean up worktree for Options 1 & 4 only
+- Clean up a worktree only if one was actually used, and normally only for Options 1 & 4
 
 ## Integration
 
@@ -197,4 +199,4 @@ git worktree remove <worktree-path>
 - **executing-plans** (Step 5) - After all batches complete
 
 **Pairs with:**
-- **using-git-worktrees** - Cleans up worktree created by that skill
+- **using-git-worktrees** - Cleans up the temporary checkout if that optional skill was used
