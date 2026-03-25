@@ -1,5 +1,6 @@
 ---
-name: plan-reviewer
+name: implementation-plan-reviewer
+aliases: plan-reviewer
 description: Reviews implementation plan documents.
 tools: read, grep, find, ls
 model: claude-opus-4-6
