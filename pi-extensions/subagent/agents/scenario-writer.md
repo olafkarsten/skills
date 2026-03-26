@@ -1,5 +1,5 @@
 ---
-name: senario-writer
+name: scenario-writer
 description: scenario writing subagent with full capabilities, isolated context
 model: claude-opus-4-6
 ---
