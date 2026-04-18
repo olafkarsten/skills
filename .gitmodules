@@ -1,0 +1,3 @@
+[submodule "skills/quality-playbook"]
+	path = skills/quality-playbook
+	url = https://github.com/andrewstellman/quality-playbook.git
