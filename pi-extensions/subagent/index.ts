@@ -14,7 +14,7 @@
  * Uses JSON mode to capture structured output from subagents.
  */
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -25,6 +25,9 @@ import { type ExtensionAPI, getMarkdownTheme } from "@mariozechner/pi-coding-age
 import { Container, Markdown, Spacer, Text } from "@mariozechner/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.js";
+import { matchesAgentName } from "./agent-resolution.js";
+import { selectSubagentModel } from "./model-selection.js";
+import { formatAbnormalResultMessage, type RepoStateSummary } from "./result-messages.js";
 
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
@@ -141,9 +144,99 @@ interface UsageStats {
 	turns: number;
 }
 
-function resolveModelOverride(modelOverride: string | undefined, defaultModel: string | undefined): string | undefined {
-	const trimmed = modelOverride?.trim();
-	return trimmed ? trimmed : defaultModel;
+interface GitSnapshot {
+	root: string;
+	head: string | null;
+	statusLines: string[];
+}
+
+function captureGitSnapshot(cwd: string): GitSnapshot | undefined {
+	const root = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd, encoding: "utf-8" });
+	if (root.status !== 0) return undefined;
+
+	const head = spawnSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf-8" });
+	const status = spawnSync("git", ["status", "--short"], { cwd, encoding: "utf-8" });
+
+	return {
+		root: root.stdout.trim(),
+		head: head.status === 0 ? head.stdout.trim() : null,
+		statusLines: status.status === 0
+			? status.stdout
+				.split("\n")
+				.map((line) => line.trimEnd())
+				.filter(Boolean)
+			: [],
+	};
+}
+
+function summarizeRepoState(cwd: string, before: GitSnapshot | undefined): RepoStateSummary | undefined {
+	const after = captureGitSnapshot(cwd);
+	if (!after) return undefined;
+
+	let newCommits: string[] = [];
+	if (before?.head && after.head && before.head !== after.head) {
+		const log = spawnSync("git", ["log", "--format=%h %s", `${before.head}..${after.head}`], { cwd, encoding: "utf-8" });
+		if (log.status === 0) {
+			newCommits = log.stdout
+				.split("\n")
+				.map((line) => line.trim())
+				.filter(Boolean);
+		}
+	}
+
+	return {
+		root: after.root,
+		headChanged: before?.head !== undefined ? before.head !== after.head : false,
+		newCommits,
+		changedFiles: after.statusLines,
+	};
+}
+
+function findAgent(agents: AgentConfig[], agentName: string): AgentConfig | undefined {
+	return agents.find((agent) => matchesAgentName(agent, agentName));
+}
+
+function formatDiscoveredAgent(agent: AgentConfig): string {
+	const aliases = agent.aliases && agent.aliases.length > 0 ? ` aliases: ${agent.aliases.join(", ")}` : "";
+	return `${agent.name} (${agent.source})${aliases}`;
+}
+
+function resolveSubagentModel(
+	agent: AgentConfig,
+	modelOverride: string | undefined,
+	ctx: { modelRegistry: any; model: any },
+): { model?: string; warning?: string; error?: string } {
+	const allModels = ctx.modelRegistry.getAll().map((model: any) => ({
+		provider: model.provider,
+		id: model.id,
+		hasAuth: false,
+	}));
+	const availableModels = ctx.modelRegistry.getAvailable().map((model: any) => ({
+		provider: model.provider,
+		id: model.id,
+		hasAuth: true,
+	}));
+	const availableSet = new Set(availableModels.map((model: any) => `${model.provider}/${model.id}`));
+	const models = allModels.map((model: any) => ({
+		...model,
+		hasAuth: availableSet.has(`${model.provider}/${model.id}`),
+	}));
+	const currentModel = ctx.model
+		? {
+			provider: ctx.model.provider,
+			id: ctx.model.id,
+			hasAuth: availableSet.has(`${ctx.model.provider}/${ctx.model.id}`),
+		}
+		: undefined;
+	const selection = selectSubagentModel({
+		requestedModel: modelOverride,
+		agentDefaultModel: agent.model,
+		currentModel,
+		allModels: models,
+		availableModels,
+	});
+	if (selection.status === "error") return { error: selection.error };
+	return { model: selection.modelRef, warning: selection.warning };
 }
 
 function formatAgentInvocation(agentName: string, modelOverride: string | undefined): string {
@@ -162,6 +255,8 @@ interface SingleResult {
 	model?: string;
 	stopReason?: string;
 	errorMessage?: string;
+	warnings?: string[];
+	repoState?: RepoStateSummary;
 	step?: number;
 }
 
@@ -210,6 +305,10 @@ function getDisplayItems(messages: Message[]): DisplayItem[] {
 	return items;
 }
 
+function isResultError(result: SingleResult): boolean {
+	return result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
+}
+
 async function mapWithConcurrencyLimit<TIn, TOut>(
 	items: TIn[],
 	concurrency: number,
@@ -251,8 +350,9 @@ async function runSingleAgent(
 	signal: AbortSignal | undefined,
 	onUpdate: OnUpdateCallback | undefined,
 	makeDetails: (results: SingleResult[]) => SubagentDetails,
+	ctx: { modelRegistry: any; model: any },
 ): Promise<SingleResult> {
-	const agent = agents.find((a) => a.name === agentName);
+	const agent = findAgent(agents, agentName);
 
 	if (!agent) {
 		return {
@@ -261,22 +361,42 @@ async function runSingleAgent(
 			task,
 			exitCode: 1,
 			messages: [],
-			stderr: `Unknown agent: ${agentName}`,
+			stderr: `Unknown agent: ${agentName}. Lookup checks frontmatter name, aliases, and the markdown filename basename.`,
 			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
+			errorMessage: `Unknown agent: ${agentName}`,
 			step,
 		};
 	}
 
-	const effectiveModel = resolveModelOverride(modelOverride, agent.model);
+	const modelSelection = resolveSubagentModel(agent, modelOverride, ctx);
+	if (modelSelection.error) {
+		return {
+			agent: agent.name,
+			agentSource: agent.source,
+			task,
+			exitCode: 1,
+			messages: [],
+			stderr: "",
+			usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
+			model: modelOverride?.trim() || agent.model,
+			stopReason: "error",
+			errorMessage: modelSelection.error,
+			step,
+		};
+	}
+
+	const effectiveModel = modelSelection.model;
 	const args: string[] = ["--mode", "json", "-p", "--no-session"];
 	if (effectiveModel) args.push("--model", effectiveModel);
 	if (agent.tools && agent.tools.length > 0) args.push("--tools", agent.tools.join(","));
 
 	let tmpPromptDir: string | null = null;
 	let tmpPromptPath: string | null = null;
+	const runCwd = cwd ?? defaultCwd;
+	const beforeRepoState = captureGitSnapshot(runCwd);
 
 	const currentResult: SingleResult = {
-		agent: agentName,
+		agent: agent.name,
 		agentSource: agent.source,
 		task,
 		exitCode: 0,
@@ -284,6 +404,7 @@ async function runSingleAgent(
 		stderr: "",
 		usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
 		model: effectiveModel,
+		warnings: modelSelection.warning ? [modelSelection.warning] : undefined,
 		step,
 	};
 
@@ -308,7 +429,7 @@ async function runSingleAgent(
 		let wasAborted = false;
 
 		const exitCode = await new Promise<number>((resolve) => {
-			const proc = spawn("pi", args, { cwd: cwd ?? defaultCwd, shell: false, stdio: ["ignore", "pipe", "pipe"] });
+			const proc = spawn("pi", args, { cwd: runCwd, shell: false, stdio: ["ignore", "pipe", "pipe"] });
 			let buffer = "";
 
 			const processLine = (line: string) => {
@@ -382,7 +503,26 @@ async function runSingleAgent(
 		});
 
 		currentResult.exitCode = exitCode;
-		if (wasAborted) throw new Error("Subagent was aborted");
+		currentResult.repoState = summarizeRepoState(runCwd, beforeRepoState);
+		if (wasAborted) {
+			currentResult.stopReason = "aborted";
+			currentResult.errorMessage = formatAbnormalResultMessage({
+				reason: "aborted",
+				agent: currentResult.agent,
+				repoState: currentResult.repoState,
+				stderr: currentResult.stderr,
+			});
+			return currentResult;
+		}
+		if (!getFinalOutput(currentResult.messages)) {
+			currentResult.stopReason = "error";
+			currentResult.errorMessage = formatAbnormalResultMessage({
+				reason: "no-final-result",
+				agent: currentResult.agent,
+				repoState: currentResult.repoState,
+				stderr: currentResult.stderr,
+			});
+		}
 		return currentResult;
 	} finally {
 		if (tmpPromptPath)
@@ -503,7 +643,7 @@ export default function (pi: ExtensionAPI) {
 				});
 
 			if (modeCount !== 1) {
-				const available = agents.map((a) => `${a.name} (${a.source})`).join(", ") || "none";
+				const available = agents.map(formatDiscoveredAgent).join(", ") || "none";
 				return {
 					content: [
 						{
@@ -526,7 +666,7 @@ export default function (pi: ExtensionAPI) {
 				}
 
 				const projectAgentsRequested = Array.from(requestedAgentNames)
-					.map((name) => agents.find((a) => a.name === name))
+					.map((name) => findAgent(agents, name))
 					.filter((a): a is AgentConfig => a?.source === "project");
 
 				if (projectAgentsRequested.length > 0) {
@@ -578,11 +718,11 @@ export default function (pi: ExtensionAPI) {
 						signal,
 						chainUpdate,
 						makeDetails("chain"),
+						ctx,
 					);
 					results.push(result);
 
-					const isError =
-						result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
+					const isError = isResultError(result);
 					if (isError) {
 						const errorMsg =
 							result.errorMessage || result.stderr || getFinalOutput(result.messages) || "(no output)";
@@ -660,17 +800,18 @@ export default function (pi: ExtensionAPI) {
 							}
 						},
 						makeDetails("parallel"),
+						ctx,
 					);
 					allResults[index] = result;
 					emitParallelUpdate();
 					return result;
 				});
 
-				const successCount = results.filter((r) => r.exitCode === 0).length;
+				const successCount = results.filter((r) => !isResultError(r)).length;
 				const summaries = results.map((r) => {
-					const output = getFinalOutput(r.messages);
+					const output = r.errorMessage || getFinalOutput(r.messages);
 					const preview = output.slice(0, 100) + (output.length > 100 ? "..." : "");
-					return `[${r.agent}] ${r.exitCode === 0 ? "completed" : "failed"}: ${preview || "(no output)"}`;
+					return `[${r.agent}] ${isResultError(r) ? "failed" : "completed"}: ${preview || "(no output)"}`;
 				});
 				return {
 					content: [
@@ -740,13 +881,11 @@ export default function (pi: ExtensionAPI) {
 							if (partial.details?.results[0]) emitLoopUpdate(partial.details.results[0], "coder", iteration);
 						},
 						makeDetails("loop"),
+						ctx,
 					);
 					loopResults.push({ iteration, role: "coder", result: coderResult });
 
-					const coderError =
-						coderResult.exitCode !== 0 ||
-						coderResult.stopReason === "error" ||
-						coderResult.stopReason === "aborted";
+					const coderError = isResultError(coderResult);
 					if (coderError) {
 						loopStatus = "error";
 						const errorMsg =
@@ -784,13 +923,11 @@ export default function (pi: ExtensionAPI) {
 							if (partial.details?.results[0]) emitLoopUpdate(partial.details.results[0], "reviewer", iteration);
 						},
 						makeDetails("loop"),
+						ctx,
 					);
 					loopResults.push({ iteration, role: "reviewer", result: reviewerResult });
 
-					const reviewerError =
-						reviewerResult.exitCode !== 0 ||
-						reviewerResult.stopReason === "error" ||
-						reviewerResult.stopReason === "aborted";
+					const reviewerError = isResultError(reviewerResult);
 					if (reviewerError) {
 						loopStatus = "error";
 						const errorMsg =
@@ -873,8 +1010,9 @@ export default function (pi: ExtensionAPI) {
 					signal,
 					onUpdate,
 					makeDetails("single"),
+					ctx,
 				);
-				const isError = result.exitCode !== 0 || result.stopReason === "error" || result.stopReason === "aborted";
+				const isError = isResultError(result);
 				if (isError) {
 					const errorMsg =
 						result.errorMessage || result.stderr || getFinalOutput(result.messages) || "(no output)";
@@ -890,7 +1028,7 @@ export default function (pi: ExtensionAPI) {
 				};
 			}
 
-			const available = agents.map((a) => `${a.name} (${a.source})`).join(", ") || "none";
+			const available = agents.map(formatDiscoveredAgent).join(", ") || "none";
 			return {
 				content: [{ type: "text", text: `Invalid parameters. Available agents: ${available}` }],
 				details: makeDetails("single")([]),
@@ -987,7 +1125,7 @@ export default function (pi: ExtensionAPI) {
 
 			if (details.mode === "single" && details.results.length === 1) {
 				const r = details.results[0];
-				const isError = r.exitCode !== 0 || r.stopReason === "error" || r.stopReason === "aborted";
+				const isError = isResultError(r);
 				const icon = isError ? theme.fg("error", "✗") : theme.fg("success", "✓");
 				const displayItems = getDisplayItems(r.messages);
 				const finalOutput = getFinalOutput(r.messages);
@@ -1091,7 +1229,7 @@ export default function (pi: ExtensionAPI) {
 						container.addChild(new Text(theme.fg("muted", `─── Iteration ${iter} ───`), 0, 0));
 
 						for (const entry of entries) {
-							const rIcon = entry.result.exitCode === 0 ? theme.fg("success", "✓") : theme.fg("error", "✗");
+							const rIcon = isResultError(entry.result) ? theme.fg("error", "✗") : theme.fg("success", "✓");
 							const roleLabel = entry.role === "coder"
 								? theme.fg("accent", "coder")
 								: theme.fg("warning", "reviewer");
@@ -1157,7 +1295,11 @@ export default function (pi: ExtensionAPI) {
 				for (const [iter, entries] of showIters) {
 					text += `\n\n${theme.fg("muted", `─── Iteration ${iter}`)}`;
 					for (const entry of entries) {
-						const rIcon = entry.result.exitCode === 0 ? theme.fg("success", "✓") : (entry.result.exitCode === -1 ? theme.fg("warning", "⏳") : theme.fg("error", "✗"));
+						const rIcon = entry.result.exitCode === -1
+							? theme.fg("warning", "⏳")
+							: isResultError(entry.result)
+								? theme.fg("error", "✗")
+								: theme.fg("success", "✓");
 						const roleLabel = entry.role === "coder" ? theme.fg("accent", "coder") : theme.fg("warning", "reviewer");
 						const finalOut = getFinalOutput(entry.result.messages);
 						const preview = finalOut.length > 120 ? `${finalOut.slice(0, 120)}…` : finalOut;
@@ -1184,7 +1326,7 @@ export default function (pi: ExtensionAPI) {
 			};
 
 			if (details.mode === "chain") {
-				const successCount = details.results.filter((r) => r.exitCode === 0).length;
+				const successCount = details.results.filter((r) => !isResultError(r)).length;
 				const icon = successCount === details.results.length ? theme.fg("success", "✓") : theme.fg("error", "✗");
 
 				if (expanded) {
@@ -1201,7 +1343,7 @@ export default function (pi: ExtensionAPI) {
 					);
 
 					for (const r of details.results) {
-						const rIcon = r.exitCode === 0 ? theme.fg("success", "✓") : theme.fg("error", "✗");
+						const rIcon = isResultError(r) ? theme.fg("error", "✗") : theme.fg("success", "✓");
 						const displayItems = getDisplayItems(r.messages);
 						const finalOutput = getFinalOutput(r.messages);
 
@@ -1253,7 +1395,7 @@ export default function (pi: ExtensionAPI) {
 					theme.fg("toolTitle", theme.bold("chain ")) +
 					theme.fg("accent", `${successCount}/${details.results.length} steps`);
 				for (const r of details.results) {
-					const rIcon = r.exitCode === 0 ? theme.fg("success", "✓") : theme.fg("error", "✗");
+					const rIcon = isResultError(r) ? theme.fg("error", "✗") : theme.fg("success", "✓");
 					const displayItems = getDisplayItems(r.messages);
 					text += `\n\n${theme.fg("muted", `─── Step ${r.step}: `)}${theme.fg("accent", r.agent)} ${rIcon}`;
 					if (displayItems.length === 0) text += `\n${theme.fg("muted", "(no output)")}`;
@@ -1267,8 +1409,8 @@ export default function (pi: ExtensionAPI) {
 
 			if (details.mode === "parallel") {
 				const running = details.results.filter((r) => r.exitCode === -1).length;
-				const successCount = details.results.filter((r) => r.exitCode === 0).length;
-				const failCount = details.results.filter((r) => r.exitCode > 0).length;
+				const successCount = details.results.filter((r) => r.exitCode !== -1 && !isResultError(r)).length;
+				const failCount = details.results.filter((r) => r.exitCode !== -1 && isResultError(r)).length;
 				const isRunning = running > 0;
 				const icon = isRunning
 					? theme.fg("warning", "⏳")
@@ -1290,7 +1432,7 @@ export default function (pi: ExtensionAPI) {
 					);
 
 					for (const r of details.results) {
-						const rIcon = r.exitCode === 0 ? theme.fg("success", "✓") : theme.fg("error", "✗");
+						const rIcon = isResultError(r) ? theme.fg("error", "✗") : theme.fg("success", "✓");
 						const displayItems = getDisplayItems(r.messages);
 						const finalOutput = getFinalOutput(r.messages);
 
@@ -1337,9 +1479,9 @@ export default function (pi: ExtensionAPI) {
 					const rIcon =
 						r.exitCode === -1
 							? theme.fg("warning", "⏳")
-							: r.exitCode === 0
-								? theme.fg("success", "✓")
-								: theme.fg("error", "✗");
+							: isResultError(r)
+								? theme.fg("error", "✗")
+								: theme.fg("success", "✓");
 					const displayItems = getDisplayItems(r.messages);
 					text += `\n\n${theme.fg("muted", "─── ")}${theme.fg("accent", r.agent)} ${rIcon}`;
 					if (displayItems.length === 0)

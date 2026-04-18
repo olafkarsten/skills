@@ -121,10 +121,19 @@ The `model` in an agent markdown file is the default model for that agent. You c
 override it per invocation:
 
 ```json
-{ "agent": "scout", "task": "Find auth code", "model": "gpt-5.4-codex" }
+{ "agent": "scout", "task": "Find auth code", "model": "openai-codex/gpt-5.4" }
 ```
 
 This also works for `tasks[]`, `chain[]`, and `loop.coder` / `loop.reviewer` items.
+
+Model handling is preflighted before the subprocess starts:
+- explicit `model` overrides fail early if the model is missing or has no auth
+- invalid or unauthenticated **agent default** models fall back to the current
+  session model when possible, otherwise the first authenticated model
+- `model: inherit` in agent frontmatter uses the current session model
+
+Canonical `provider/model` references are recommended when multiple providers ship
+models with the same ID.
 
 ## Output Display
 
@@ -157,6 +166,7 @@ Agents are markdown files with YAML frontmatter:
 ```markdown
 ---
 name: my-agent
+aliases: short-name, old-name
 description: What this agent does
 tools: read, grep, find, ls
 model: claude-haiku-4-5
@@ -167,6 +177,11 @@ System prompt for the agent goes here.
 
 The `model` value above is the default. A caller can override it when invoking the
 subagent tool.
+
+Agents can be resolved by:
+- `name` in frontmatter
+- optional `aliases`
+- the markdown filename basename (for example `implementation-plan-reviewer.md`)
 
 **Locations:**
 - `~/.pi/agent/agents/*.md` - user-level (always loaded)
@@ -183,7 +198,7 @@ agents also exist in `agents/`.
 |-------|---------|---------------|-------|
 | `scout` | Fast codebase recon and compressed handoff context | `claude-haiku-4-5` | `read, grep, find, ls, bash` |
 | `planner` | Create implementation plans from requirements and context | `claude-opus-4-6` | default toolset |
-| `implementer` | Implement tasks with full capabilities | `claude-haiku-4.5` | default toolset |
+| `implementer` | Implement tasks with full capabilities | `claude-haiku-4-5` | default toolset |
 | `spec-compliance-reviewer` | Verify implementation matches the request exactly | `claude-opus-4-6` | `read, grep, find, ls` |
 | `code-quality-reviewer` | Review production readiness, testing, and maintainability | `claude-opus-4-6` | `read, grep, find, ls` |
 | `worker` | General-purpose subagent with full capabilities | `claude-opus-4-6` | default toolset |
@@ -200,7 +215,8 @@ agents also exist in `agents/`.
 
 - **Exit code != 0**: tool returns error with stderr / output
 - **stopReason `error`**: LLM error propagated with error message
-- **stopReason `aborted`**: user abort (Ctrl+C) kills subprocess and surfaces an error
+- **stopReason `aborted`**: user abort (Ctrl+C) kills subprocess and returns structured repo-state metadata
+- **No final assistant result**: surfaced as an error with repo-state metadata instead of a blank result
 - **Chain mode**: stops at the first failing step and reports which step failed
 - **Loop mode**: stops if coder or reviewer fails, or ends after `maxIterations` without approval
 

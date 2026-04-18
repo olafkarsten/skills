@@ -118,11 +118,17 @@ Implementer subagents report one of four statuses. Handle each appropriately:
 
 **Never** ignore an escalation or force the same model to retry without changes. If the implementer said it's stuck, something needs to change.
 
-## Prompt Templates
+## Required Agents
 
-- `./implementer-prompt.md` - Dispatch implementer subagent
-- `./spec-reviewer-prompt.md` - Dispatch spec compliance reviewer subagent
-- `./code-quality-reviewer-prompt.md` - Dispatch code quality reviewer subagent
+This skill uses three specialized agents. Use these **exact agent names** when dispatching subagents:
+
+| Role | Agent Name | Prompt Template |
+|------|-----------|-----------------|
+| Implementer | `implementer` | `./implementer-prompt.md` |
+| Spec Compliance Reviewer | `spec-compliance-reviewer` | `./spec-reviewer-prompt.md` |
+| Code Quality Reviewer | `code-quality-reviewer` | `./code-quality-reviewer-prompt.md` |
+
+The prompt templates describe what context to provide. The agent names are what you pass to the subagent tool.
 
 ## Example Workflow
 

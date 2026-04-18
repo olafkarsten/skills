@@ -6,11 +6,13 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { parseFrontmatter } from "@mariozechner/pi-coding-agent";
+import { buildAgentAliases } from "./agent-resolution.js";
 
 export type AgentScope = "user" | "project" | "both";
 
 export interface AgentConfig {
 	name: string;
+	aliases?: string[];
 	description: string;
 	tools?: string[];
 	model?: string;
@@ -60,9 +62,15 @@ function loadAgentsFromDir(dir: string, source: "user" | "project"): AgentConfig
 			?.split(",")
 			.map((t: string) => t.trim())
 			.filter(Boolean);
+		const explicitAliases = frontmatter.aliases
+			?.split(",")
+			.map((alias: string) => alias.trim())
+			.filter(Boolean);
+		const aliases = buildAgentAliases(frontmatter.name, filePath, explicitAliases);
 
 		agents.push({
 			name: frontmatter.name,
+			aliases: aliases.length > 0 ? aliases : undefined,
 			description: frontmatter.description,
 			tools: tools && tools.length > 0 ? tools : undefined,
 			model: frontmatter.model,
