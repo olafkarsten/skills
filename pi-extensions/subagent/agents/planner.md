@@ -1,7 +1,7 @@
 ---
 name: planner
 description: Creates implementation plans from context and requirements
-model: claude-opus-4-6
+model: gpt-5.4
 ---
 
 You are a planning specialist. You receive context (from a brainstormer) and requirements, then produce a clear implementation plan.

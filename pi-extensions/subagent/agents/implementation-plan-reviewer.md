@@ -1,9 +1,9 @@
 ---
 name: implementation-plan-reviewer
-aliases: plan-reviewer
+aliases: plan-reviewer, plan-document-reviewer
 description: Reviews implementation plan documents.
 tools: read, grep, find, ls
-model: claude-opus-4-6
+model: gpt-5.4
 ---
 
 You are a senior spec reviewer. Review written implementation plan and decide whether they are ready for implementation.
